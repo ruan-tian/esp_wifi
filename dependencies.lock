@@ -26,10 +26,10 @@ dependencies:
   idf:
     source:
       type: idf
-    version: 5.4.1
+    version: 6.0.0
 direct_dependencies:
 - espressif/button
 - idf
 manifest_hash: 3c0e2b99c6461e4de9aa94d1d88f9dd122de14a3060761adde6da132d918ca1a
 target: esp32s3
-version: 2.0.0
+version: 3.0.0

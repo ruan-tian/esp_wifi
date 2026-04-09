@@ -27,4 +27,6 @@ void wifi_connector_init(void);
 esp_err_t wifi_smartconfig_start(int timeout_ms);
 
 const char* wifi_get_connected_ssid(void);
+
+void wifi_cancel(void);
 #endif

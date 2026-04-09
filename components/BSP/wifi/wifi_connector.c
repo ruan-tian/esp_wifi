@@ -15,6 +15,7 @@ static const char *TAG = "WIFI_CONN";
 #define WIFI_CONNECTED_BIT  BIT0      // WiFi连接成功标志位
 #define WIFI_FAIL_BIT       BIT1      // WiFi连接失败标志位
 #define SMARTCONFIG_DONE    BIT2      // SmartConfig完成标志位
+#define WIFI_CANCEL_BIT     BIT3      // WiFi连接取消标志位
 #define MAX_RETRY           5         // 最大重试连接次数
 
 // 全局变量定义
@@ -172,7 +173,7 @@ esp_err_t wifi_connect_sta(const char *ssid, const char *password, int timeout_m
 
     // 清除事件组中的所有标志位
     xEventGroupClearBits(s_wifi_event_group,
-                         WIFI_CONNECTED_BIT | WIFI_FAIL_BIT | SMARTCONFIG_DONE);
+                         WIFI_CONNECTED_BIT | WIFI_FAIL_BIT | SMARTCONFIG_DONE | WIFI_CANCEL_BIT);
     s_retry_num = 0;  // 重置重试计数器
 
     // 断开当前WiFi连接（如果有）
@@ -195,17 +196,21 @@ esp_err_t wifi_connect_sta(const char *ssid, const char *password, int timeout_m
 
     // 等待连接结果，检查是否成功或失败
     EventBits_t bits = xEventGroupWaitBits(s_wifi_event_group,
-                        WIFI_CONNECTED_BIT | WIFI_FAIL_BIT,
+                        WIFI_CONNECTED_BIT | WIFI_FAIL_BIT | WIFI_CANCEL_BIT,
                         pdFALSE, pdFALSE, pdMS_TO_TICKS(timeout_ms));
 
     // 再次清除事件组标志位
     xEventGroupClearBits(s_wifi_event_group,
-                         WIFI_CONNECTED_BIT | WIFI_FAIL_BIT | SMARTCONFIG_DONE);
+                         WIFI_CONNECTED_BIT | WIFI_FAIL_BIT | SMARTCONFIG_DONE | WIFI_CANCEL_BIT);
 
     // 检查连接结果
     if (bits & WIFI_CONNECTED_BIT) {
         ESP_LOGI(TAG, "Connected to %s", ssid);
         return ESP_OK;
+    }
+    if (bits & WIFI_CANCEL_BIT) {
+        ESP_LOGI(TAG, "connection canceled");
+        return ESP_FAIL;
     }
     ESP_LOGE(TAG, "Failed to connect to %s", ssid);
     return ESP_FAIL;
@@ -224,7 +229,7 @@ esp_err_t wifi_smartconfig_start(int timeout_ms)
 
     // 清除事件组中的所有标志位
     xEventGroupClearBits(s_wifi_event_group,
-                         WIFI_CONNECTED_BIT | WIFI_FAIL_BIT | SMARTCONFIG_DONE);
+                         WIFI_CONNECTED_BIT | WIFI_FAIL_BIT | SMARTCONFIG_DONE | WIFI_CANCEL_BIT);
     s_retry_num = 0;  // 重置重试计数器
 
     // 断开当前WiFi连接（如果有）
@@ -242,7 +247,7 @@ esp_err_t wifi_smartconfig_start(int timeout_ms)
 
     // 等待SmartConfig完成事件
     EventBits_t bits = xEventGroupWaitBits(s_wifi_event_group,
-                        SMARTCONFIG_DONE,
+                        SMARTCONFIG_DONE | WIFI_CANCEL_BIT,
                         pdFALSE, pdFALSE, pdMS_TO_TICKS(timeout_ms));
 
     // 检查SmartConfig是否超时
@@ -254,17 +259,21 @@ esp_err_t wifi_smartconfig_start(int timeout_ms)
 
     // SmartConfig完成后，等待WiFi连接结果
     bits = xEventGroupWaitBits(s_wifi_event_group,
-                        WIFI_CONNECTED_BIT | WIFI_FAIL_BIT,
+                        WIFI_CONNECTED_BIT | WIFI_FAIL_BIT | WIFI_CANCEL_BIT,
                         pdFALSE, pdFALSE, pdMS_TO_TICKS(30000));  // 给予30秒时间连接
 
     // 清除事件组标志位
     xEventGroupClearBits(s_wifi_event_group,
-                         WIFI_CONNECTED_BIT | WIFI_FAIL_BIT | SMARTCONFIG_DONE);
+                         WIFI_CONNECTED_BIT | WIFI_FAIL_BIT | SMARTCONFIG_DONE | WIFI_CANCEL_BIT);
 
     // 检查WiFi连接结果
     if (bits & WIFI_CONNECTED_BIT) {
         ESP_LOGI(TAG, "SmartConfig connected to %s", s_sc_ssid);
         return ESP_OK;
+    }
+    if (bits & WIFI_CANCEL_BIT) {
+        ESP_LOGI(TAG, "SmartConfig connection canceled");
+        return ESP_FAIL;
     }
 
     ESP_LOGE(TAG, "SmartConfig connection failed");
@@ -279,4 +288,19 @@ esp_err_t wifi_smartconfig_start(int timeout_ms)
 const char *wifi_get_connected_ssid(void)
 {
     return s_sc_ssid;
+}
+
+/**
+ * @brief 强行中止正在进行的 WiFi 连接或配网
+ */
+void wifi_cancel(void)
+{
+    if (!s_wifi_inited) return;
+    
+    // 发送取消信号，立即解除 xEventGroupWaitBits 的阻塞
+    xEventGroupSetBits(s_wifi_event_group, WIFI_CANCEL_BIT);
+    
+    // 切断底层动作
+    esp_wifi_disconnect();
+    esp_smartconfig_stop();
 }

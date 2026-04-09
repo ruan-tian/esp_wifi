@@ -15,8 +15,6 @@ typedef enum {
 } Chinese_Index;
 // 16×16汉字点阵数组（每个汉字32字节）
 extern const uint8_t Font_16x16_Chinese[][32];
-extern const uint8_t happy_image_data[120*160*2];
-extern const uint8_t unhappy_image_data[120*160*2];
 /********************* 16×16 数字/符号点阵（0、1、2、4、5、6、7、8、9、:）*********************/
 // 数字/符号索引（与Font_16x16_Number数组行索引一一对应）
 typedef enum {

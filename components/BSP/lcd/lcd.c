@@ -25,6 +25,9 @@
 
 #include "lcd.h"
 #include "font_picture.h"
+#include "unicodeToGB2312.h"
+
+extern const uint8_t hzk16_start[] asm("_binary_HZK16C_start");
 
 // ===================== 日志配置 =====================
 static const char *TAG = "LCD";
@@ -759,4 +762,69 @@ void lcd_flush_buffer(void)
 {
     // 如果实现了双缓冲，在此将后缓冲区内容刷新到LCD
     // 此处为占位实现
+}
+static uint16_t utf8_to_unicode(const uint8_t *utf8, int *len) {
+    uint16_t unicode = 0;
+    if ((utf8[0] & 0x80) == 0x00) {
+        unicode = utf8[0];
+        *len = 1;
+    } else if ((utf8[0] & 0xE0) == 0xC0) {
+        unicode = ((utf8[0] & 0x1F) << 6) | (utf8[1] & 0x3F);
+        *len = 2;
+    } else if ((utf8[0] & 0xF0) == 0xE0) {
+        unicode = ((utf8[0] & 0x0F) << 12) | ((utf8[1] & 0x3F) << 6) | (utf8[2] & 0x3F);
+        *len = 3;
+    } else {
+        *len = 1; // 异常字符跳过
+        unicode = 0x0020;
+    }
+    return unicode;
+}
+
+
+/**
+ * @brief 终极安全版：支持最大像素宽度限制，防止 UI 溢出和乱码
+ */
+void ili9341_draw_string_utf8_limit(uint16_t x, uint16_t y, const char *str, uint16_t color, uint16_t bg_color, uint16_t max_w)
+{
+    uint16_t curr_x = x;
+    const uint8_t *p = (const uint8_t *)str;
+    int utf8_len = 0;
+
+    while (*p) {
+        // UI保护：如果画这个字会超过最大允许宽度，立刻停止，防止覆盖右侧图标
+        if (curr_x - x >= max_w) {
+            break; 
+        }
+
+        if (*p < 0x80) {
+            // 英文通道
+            if (curr_x - x + 8 > max_w) break; // 宽度预判
+            ili9341_draw_char_8x16(curr_x, y + 2, *p, color, bg_color);
+            curr_x += 8;
+            p++;
+        } else {
+            // 中文通道
+            if (curr_x - x + 16 > max_w) break; // 宽度预判
+            
+            uint16_t unicode = utf8_to_unicode(p, &utf8_len);
+            uint16_t gb2312 = UnicodeToGB2312(unicode); 
+            
+            if (gb2312 != 0 && gb2312 != 0x0020) {
+                uint8_t qh = (gb2312 >> 8) - 0xA0; 
+                uint8_t wh = (gb2312 & 0xFF) - 0xA0;
+                uint32_t offset = ((qh - 1) * 94 + (wh - 1)) * 32;
+
+                const uint8_t *font_buf = &hzk16_start[offset];
+                ili9341_draw_chinese_16x16(curr_x, y, font_buf, color, bg_color);
+            }
+            curr_x += 16;
+            
+            // 内存保护：绝对安全的步进方法，防止遇到被意外截断的半个汉字导致越界
+            for (int i = 0; i < utf8_len; i++) {
+                if (*p == '\0') break; 
+                p++;
+            }
+        }
+    }
 }

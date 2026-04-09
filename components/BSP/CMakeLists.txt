@@ -3,15 +3,20 @@ set(src_dirs
             lcd
             font_picture
             wifi
-            menu)
+            menu
+            unicodeToGB2312)
+
 set(include_dirs
             spi
             lcd
             font_picture
             wifi
-            menu)
+            menu
+            unicodeToGB2312)
+
 set(requires
-            driver
+            esp_driver_spi
+            esp_driver_gpio
             esp_event
             nvs_flash
             esp_wifi
@@ -19,7 +24,10 @@ set(requires
             button
             esp_timer
             )
-idf_component_register(SRC_DIRS "${src_dirs}"
-                            INCLUDE_DIRS "${include_dirs}"
-                            REQUIRES "${requires}")
-component_compile_options(-ffast-math -O3 -Wno-error=format=-Wno-format)
+
+idf_component_register(SRC_DIRS ${src_dirs}
+                            INCLUDE_DIRS ${include_dirs}
+                            REQUIRES ${requires})
+
+component_compile_options(-ffast-math -O3 -Wno-error -Wno-missing-braces)
+target_add_binary_data(${COMPONENT_LIB} "font_picture/HZK16C" TEXT)

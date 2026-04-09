@@ -189,6 +189,9 @@ void lcd_clear_buffer(void);
  */
 void lcd_flush_buffer(void);
 
+// 在文件末尾添加声明
+void ili9341_draw_string_utf8_limit(uint16_t x, uint16_t y, const char *str, uint16_t color, uint16_t bg_color, uint16_t max_w);
+
 #ifdef __cplusplus
 }
 #endif
