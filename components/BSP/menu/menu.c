@@ -57,6 +57,7 @@ typedef enum
     STATE_KEYBOARD,    // 虚拟键盘手动导航
     STATE_CONNECTING,  // 直连中
     STATE_SMARTCONFIG, // 一键配网中
+    STATE_INFO,        // 信息页
 } menu_state_t;
 
 // 状态名称数组，用于调试日志
@@ -66,6 +67,7 @@ static const char *state_names[] = {
     [STATE_KEYBOARD] = "KEYBOARD",
     [STATE_CONNECTING] = "CONNECTING",
     [STATE_SMARTCONFIG] = "SMARTCONFIG",
+    [STATE_INFO] = "INFO", 
 };
 
 // ===================== 状态机上下文 =====================
@@ -274,7 +276,53 @@ static void display_detail(void)
     // 5. 底部操作提示
     ili9341_draw_string_8x16(10, 290, "[OK] Connect   [BACK] Return", LCD_COLOR_GREEN, LCD_COLOR_BLACK);
 }
+// ===================== UI: 高级网络信息页 =====================
+static void display_info(void)
+{
+    ili9341_fill_screen(LCD_COLOR_BLACK);
+    ili9341_draw_string_8x16(10, 10, "Device Network Info", LCD_COLOR_CYAN, LCD_COLOR_BLACK);
+    ili9341_draw_line(0, 30, LCD_WIDTH, 30, LCD_COLOR_WHITE);
 
+    wifi_ap_record_t ap_info;
+    // 获取当前连接的 AP 信息，如果没连上会返回非 ESP_OK
+    esp_err_t err = esp_wifi_sta_get_ap_info(&ap_info);
+
+    if (err != ESP_OK) {
+        ili9341_draw_string_8x16(10, 60, "Status: Not Connected", LCD_COLOR_RED, LCD_COLOR_BLACK);
+        ili9341_draw_string_8x16(10, 90, "Please connect first.", LCD_COLOR_GRAY, LCD_COLOR_BLACK);
+    } else {
+        char buf[64];
+        int y = 45;
+
+        // 1. 打印当前连接的 SSID
+        snprintf(buf, sizeof(buf), "SSID: %s", ap_info.ssid);
+        ili9341_draw_string_utf8_limit(10, y, buf, LCD_COLOR_YELLOW, LCD_COLOR_BLACK, LCD_WIDTH - 20);
+        y += 25;
+
+        // 2. 获取并打印 IP 和 网关
+        esp_netif_t *netif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+        esp_netif_ip_info_t ip_info;
+        if (netif && esp_netif_get_ip_info(netif, &ip_info) == ESP_OK) {
+            snprintf(buf, sizeof(buf), "IP: " IPSTR, IP2STR(&ip_info.ip));
+            ili9341_draw_string_8x16(10, y, buf, LCD_COLOR_WHITE, LCD_COLOR_BLACK);
+            y += 25;
+
+            snprintf(buf, sizeof(buf), "GW: " IPSTR, IP2STR(&ip_info.gw));
+            ili9341_draw_string_8x16(10, y, buf, LCD_COLOR_WHITE, LCD_COLOR_BLACK);
+            y += 25;
+        }
+
+        // 3. 获取并打印本机 MAC 地址
+        uint8_t mac[6];
+        esp_wifi_get_mac(WIFI_IF_STA, mac);
+        snprintf(buf, sizeof(buf), "MAC: %02X:%02X:%02X:%02X:%02X:%02X",
+                 mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+        ili9341_draw_string_8x16(10, y, buf, LCD_COLOR_WHITE, LCD_COLOR_BLACK);
+    }
+
+    // 底部返回提示
+    ili9341_draw_string_8x16(10, 290, "[BACK] Return to List", LCD_COLOR_GREEN, LCD_COLOR_BLACK);
+}
 // ===================== UI: 虚拟键盘绘制 =====================
 /**
  * @brief 绘制密码输入框
@@ -572,6 +620,10 @@ static void smartconfig_task(void *arg)
             }
             break;
 
+        case STATE_INFO:
+            display_info();
+            break;
+
         default:
             break;
     }
@@ -734,9 +786,12 @@ static void dispatch_button_event(button_event_t event)
         return;
     }
     
+    
     if (event == BUTTON_ENTER_LONG) {
-        // 预留给长按确认键的功能（比如弹窗显示当前设备的 IP 地址）
-        ESP_LOGI(TAG, "LONG PRESS ENTER triggers!");
+        if (sm.state == STATE_LIST) {
+            ESP_LOGI(TAG, "LONG PRESS ENTER triggers! Showing Net Info...");
+            enter_state(STATE_INFO);
+        }
         return;
     }
 
@@ -753,6 +808,11 @@ static void dispatch_button_event(button_event_t event)
         break;
     case STATE_KEYBOARD:
         handle_keyboard_event(event);
+        break;
+    case STATE_INFO:
+        if (event == BUTTON_BACK || event == BUTTON_ENTER) {
+            enter_state(STATE_LIST);
+        }
         break;
     case STATE_CONNECTING:
     case STATE_SMARTCONFIG:
