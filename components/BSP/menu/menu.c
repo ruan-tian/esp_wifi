@@ -40,8 +40,10 @@ typedef enum
     BUTTON_RIGHT,
     BUTTON_ENTER,
     BUTTON_BACK,
-    BUTTON_REFRESH,     // 定时器触发的刷新事件
-    BUTTON_RETURN_LIST, // 内部事件：安全返回列表页并强制重扫
+    BUTTON_ENTER_LONG,  // 新增：长按确认键
+    BUTTON_BACK_LONG,   // 新增：长按返回键
+    BUTTON_REFRESH,     
+    BUTTON_RETURN_LIST,
 } button_event_t;
 
 // ===================== 状态机定义 =====================
@@ -718,6 +720,25 @@ static void dispatch_button_event(button_event_t event)
         }
         return;
     }
+    // 【新增】：全局高级操作拦截
+    if (event == BUTTON_BACK_LONG) {
+        ESP_LOGW(TAG, "LONG PRESS BACK! Erasing NVS and Restarting...");
+        ili9341_fill_screen(LCD_COLOR_RED);
+        ili9341_draw_string_8x16(20, 100, "Factory Reset...", LCD_COLOR_WHITE, LCD_COLOR_RED);
+        ili9341_draw_string_8x16(20, 120, "Erasing WiFi Data", LCD_COLOR_WHITE, LCD_COLOR_RED);
+        
+        // 抹除 NVS 分区并重启
+        nvs_flash_erase();
+        vTaskDelay(pdMS_TO_TICKS(1000));
+        esp_restart(); 
+        return;
+    }
+    
+    if (event == BUTTON_ENTER_LONG) {
+        // 预留给长按确认键的功能（比如弹窗显示当前设备的 IP 地址）
+        ESP_LOGI(TAG, "LONG PRESS ENTER triggers!");
+        return;
+    }
 
     switch (sm.state)
     {
@@ -750,128 +771,84 @@ static void dispatch_button_event(button_event_t event)
     }
 }
 
-// ===================== 中断与主循环 =====================
-/**
- * @brief GPIO中断处理函数
- * @param arg GPIO编号
- */
-static void IRAM_ATTR gpio_isr_handler(void *arg)
-{
-    uint32_t gpio_num = (uint32_t)arg;
-    button_event_t event;
-
-    // 根据GPIO编号确定按钮事件
-    if (gpio_num == KEY_UP_GPIO)
-        event = BUTTON_UP;
-    else if (gpio_num == KEY_DOWN_GPIO)
-        event = BUTTON_DOWN;
-    else if (gpio_num == KEY_RIGHT_GPIO)
-        event = BUTTON_RIGHT;
-    else if (gpio_num == KEY_ENTER_GPIO)
-        event = BUTTON_ENTER;
-    else if (gpio_num == KEY_BACK_GPIO)
-        event = BUTTON_BACK;
-    else
-        return;
-
-    BaseType_t xHigherPriorityTaskWoken = pdFALSE;
-    // 发送事件到队列
-    xQueueSendFromISR(s_button_queue, &event, &xHigherPriorityTaskWoken);
-    if (xHigherPriorityTaskWoken)
-        portYIELD_FROM_ISR();
-}
-
 /**
  * @brief 按钮任务，处理按钮事件
  * @param arg 参数
  */
-static void button_task(void *arg)
-{
-    button_event_t event;
-    while (1)
-    {
-        if (xQueueReceive(s_button_queue, &event, portMAX_DELAY) == pdTRUE)
-        {
-
-            // Bug修复核心：接收网络任务发来的返回列表指令，并在此处安全重扫、切屏
-            if (event == BUTTON_RETURN_LIST)
-            {
-                ESP_LOGI(TAG, "Re-scanning to refresh g_ap_count...");
-                vTaskDelay(pdMS_TO_TICKS(500));
-                wifi_scan_and_update_list();
-                enter_state(STATE_LIST);
-                continue;
-            }
-
-            if (event == BUTTON_REFRESH)
-            {
-                dispatch_button_event(event);
-                continue;
-            }
-
-            // 简单消抖：延迟50ms检测是否真的按下
-            vTaskDelay(pdMS_TO_TICKS(50));
-            bool pressed = false;
-            switch (event)
-            {
-            case BUTTON_UP:
-                pressed = (gpio_get_level(KEY_UP_GPIO) == 0);
-                break;
-            case BUTTON_DOWN:
-                pressed = (gpio_get_level(KEY_DOWN_GPIO) == 0);
-                break;
-            case BUTTON_RIGHT:
-                pressed = (gpio_get_level(KEY_RIGHT_GPIO) == 0);
-                break;
-            case BUTTON_ENTER:
-                pressed = (gpio_get_level(KEY_ENTER_GPIO) == 0);
-                break;
-            case BUTTON_BACK:
-                pressed = (gpio_get_level(KEY_BACK_GPIO) == 0);
-                break;
-            default:
-                break;
-            }
-            if (!pressed)
-                continue;
-
-            dispatch_button_event(event);
-        }
-    }
-}
+ static void button_task(void *arg)
+ {
+     const gpio_num_t pins[5] = {KEY_UP_GPIO, KEY_DOWN_GPIO, KEY_RIGHT_GPIO, KEY_ENTER_GPIO, KEY_BACK_GPIO};
+     const button_event_t short_evts[5] = {BUTTON_UP, BUTTON_DOWN, BUTTON_RIGHT, BUTTON_ENTER, BUTTON_BACK};
+     const button_event_t long_evts[5]  = {BUTTON_UP, BUTTON_DOWN, BUTTON_RIGHT, BUTTON_ENTER_LONG, BUTTON_BACK_LONG};
+ 
+     bool last_state[5] = {1, 1, 1, 1, 1}; // 默认上拉为高电平
+     TickType_t press_tick[5] = {0};
+ 
+     while (1)
+     {
+         button_event_t event;
+         // 【巧妙设计】：将原有的死等 portMAX_DELAY 改为 20ms 超时。
+         // 这既能接收软件发送的消息，又充当了 20ms 的物理按键轮询节拍！
+         if (xQueueReceive(s_button_queue, &event, pdMS_TO_TICKS(20)) == pdTRUE) {
+             if (event == BUTTON_RETURN_LIST) {
+                 ESP_LOGI(TAG, "Re-scanning to refresh g_ap_count...");
+                 vTaskDelay(pdMS_TO_TICKS(500));
+                 wifi_scan_and_update_list();
+                 enter_state(STATE_LIST);
+                 continue;
+             }
+             if (event == BUTTON_REFRESH) {
+                 dispatch_button_event(event);
+                 continue;
+             }
+         }
+ 
+         // 轮询物理按键状态
+         for (int i = 0; i < 5; i++) {
+             bool current_state = gpio_get_level(pins[i]);
+             
+             if (last_state[i] == 1 && current_state == 0) {
+                 // 按下瞬间，记录时间戳
+                 press_tick[i] = xTaskGetTickCount();
+             } 
+             else if (last_state[i] == 0 && current_state == 1) {
+                 // 松开瞬间，计算按压时长
+                 uint32_t duration_ms = (xTaskGetTickCount() - press_tick[i]) * portTICK_PERIOD_MS;
+                 
+                 if (duration_ms >= 1000) {
+                     // 大于1秒判定为长按
+                     dispatch_button_event(long_evts[i]);
+                 } else if (duration_ms >= 30) {
+                     // 30ms ~ 1000ms 判定为短按 (自带完美的 30ms 软件消抖)
+                     dispatch_button_event(short_evts[i]);
+                 }
+             }
+             last_state[i] = current_state;
+         }
+     }
+ }
 
 /**
  * @brief 初始化按钮GPIO
  */
 static void init_buttons(void)
 {
-    // 创建事件队列和信号量
     s_button_queue = xQueueCreate(10, sizeof(button_event_t));
     s_connect_done_sem = xSemaphoreCreateBinary();
 
-    // 配置GPIO为输入模式，启用上拉电阻
     gpio_config_t io_conf = {
         .pin_bit_mask = (1ULL << KEY_UP_GPIO) | (1ULL << KEY_DOWN_GPIO) |
                         (1ULL << KEY_RIGHT_GPIO) | (1ULL << KEY_ENTER_GPIO) | (1ULL << KEY_BACK_GPIO),
         .mode = GPIO_MODE_INPUT,
         .pull_up_en = GPIO_PULLUP_ENABLE,
         .pull_down_en = GPIO_PULLDOWN_DISABLE,
-        .intr_type = GPIO_INTR_NEGEDGE, // 下降沿触发中断
+        .intr_type = GPIO_INTR_DISABLE, // 【关键修改】：彻底禁用中断，解放 IRAM
     };
     gpio_config(&io_conf);
 
-    // 安装GPIO中断服务
-    gpio_install_isr_service(0);
-    gpio_isr_handler_add(KEY_UP_GPIO, gpio_isr_handler, (void *)KEY_UP_GPIO);
-    gpio_isr_handler_add(KEY_DOWN_GPIO, gpio_isr_handler, (void *)KEY_DOWN_GPIO);
-    gpio_isr_handler_add(KEY_RIGHT_GPIO, gpio_isr_handler, (void *)KEY_RIGHT_GPIO);
-    gpio_isr_handler_add(KEY_ENTER_GPIO, gpio_isr_handler, (void *)KEY_ENTER_GPIO);
-    gpio_isr_handler_add(KEY_BACK_GPIO, gpio_isr_handler, (void *)KEY_BACK_GPIO);
-
-    // 创建按钮处理任务
+    // 取消了 gpio_install_isr_service 的调用
     xTaskCreate(button_task, "button_task", 3072, NULL, 10, NULL);
 }
-
 /**
  * @brief 定时器回调函数，用于定期刷新WiFi列表
  * @param timer 定时器句柄
