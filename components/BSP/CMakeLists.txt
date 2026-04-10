@@ -27,6 +27,7 @@ set(requires
             button
             esp_timer
             esp_http_server
+            spiffs  
             )
 
 idf_component_register(SRC_DIRS ${src_dirs}

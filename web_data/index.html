@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ESP32-S3 WiFi 控制台</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>ESP32-S3 控制面板</h1>
+            <div id="status-bar">设备已在线</div>
+        </header>
+
+        <section class="card">
+            <h2><i class="icon">✍️</i> 隔空传书</h2>
+            <p class="hint">在输入框输入文字，屏幕将实时弹出提示</p>
+            <div class="input-group">
+                <input type="text" id="msgInput" placeholder="请输入中文或英文内容..." maxlength="32">
+                <button onclick="ui.sendMsg()">发送到屏幕</button>
+            </div>
+        </section>
+
+        <section class="card">
+            <div class="card-header">
+                <h2><i class="icon">📶</i> 附近的 WiFi</h2>
+                <button class="btn-refresh" onclick="ui.refreshWiFi()">刷新列表</button>
+            </div>
+            <ul id="wifiList" class="wifi-list">
+                <li class="loading">正在加载网络列表...</li>
+            </ul>
+        </section>
+    </div>
+    <script src="app.js"></script>
+</body>
+</html>

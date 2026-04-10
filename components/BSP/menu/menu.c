@@ -893,7 +893,7 @@ static void dispatch_button_event(button_event_t event)
  {
      const gpio_num_t pins[5] = {KEY_UP_GPIO, KEY_DOWN_GPIO, KEY_RIGHT_GPIO, KEY_ENTER_GPIO, KEY_BACK_GPIO};
      const button_event_t short_evts[5] = {BUTTON_UP, BUTTON_DOWN, BUTTON_RIGHT, BUTTON_ENTER, BUTTON_BACK};
-     const button_event_t long_evts[5]  = {BUTTON_UP, BUTTON_DOWN, BUTTON_RIGHT, BUTTON_ENTER_LONG, BUTTON_BACK_LONG,};
+     const button_event_t long_evts[5]  = {BUTTON_UP, BUTTON_DOWN, BUTTON_RIGHT_LONG, BUTTON_ENTER_LONG, BUTTON_BACK_LONG};
  
      bool last_state[5] = {1, 1, 1, 1, 1}; // 默认上拉为高电平
      TickType_t press_tick[5] = {0};
