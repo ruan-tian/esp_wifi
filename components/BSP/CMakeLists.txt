@@ -5,6 +5,8 @@ set(src_dirs
             wifi
             menu
             unicodeToGB2312
+            lvgl
+
             )
 
 set(include_dirs
@@ -14,6 +16,7 @@ set(include_dirs
             wifi
             menu
             unicodeToGB2312
+            lvgl
             )
 
 set(requires

@@ -9,6 +9,9 @@ idf.py add-dependency "espressif/button^4.1.6"
 idf.py reconfigure //同步组件（下载代码）
 
 
+idf.py add-dependency "lvgl/lvgl^8.3.11"
+idf.py menuconfig
+
 # Cursor 常用快捷键（Windows 版）
 ## 一、基础编辑
 - `Ctrl + C`：复制
