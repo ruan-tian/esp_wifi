@@ -7,16 +7,21 @@
 #include "freertos/queue.h"
 #include "freertos/semphr.h"
 #include "freertos/timers.h"
-
+#include "nvs_flash.h"
+#include "nvs.h"
 #include "driver/gpio.h"
 #include "esp_log.h"
 #include "esp_wifi.h"
-
 #include "lcd.h"
+
 #include "wifi_scanner.h"
 #include "wifi_connector.h"
 
 static const char *TAG = "MENU";
+
+#define NVS_NAMESPACE "wifi_cfg"
+#define NVS_KEY_SSID "ssid"
+#define NVS_KEY_PWD "pwd"
 
 // ===================== 5 按键引脚分配 =====================
 #define KEY_UP_GPIO GPIO_NUM_5    // 上键GPIO引脚
@@ -300,7 +305,7 @@ static void display_keyboard(void)
     ili9341_draw_line(0, 25, LCD_WIDTH, 25, LCD_COLOR_WHITE);
 
     // 2. 当前已输入密码显示 (修复：使用你结构体里的 sm.password)
-    char pwd_buf[64];
+    char pwd_buf[128];
     snprintf(pwd_buf, sizeof(pwd_buf), "Pwd: %s", sm.password);
     ili9341_draw_string_8x16(5, 30, pwd_buf, LCD_COLOR_YELLOW, LCD_COLOR_BLACK);
 
@@ -353,6 +358,86 @@ static void update_keyboard_cursor(void)
     ili9341_draw_string_8x16(tx, ny, kb_layout[sm.kb_cursor_row][sm.kb_cursor_col], LCD_COLOR_BLACK, LCD_COLOR_WHITE);
 }
 
+// ===================== NVS：WiFi 凭据存取 =====================
+/**
+ * @brief 从 NVS 读取上次保存的 WiFi SSID 与密码。
+ *
+ * 数据保存在命名空间 @c NVS_NAMESPACE 下，键名为 @c NVS_KEY_SSID、@c NVS_KEY_PWD。
+ * 调用 @c nvs_get_str 时传入的缓冲区长度需包含结尾 @c '\\0'；函数内部用长度参数同时作为
+ * 输入（容量）与输出（实际写入长度，含 @c '\\0'）。
+ *
+ * @param[out] ssid           成功时写入以 @c '\\0' 结尾的 SSID；失败时内容未定义。
+ * @param[in]  max_ssid_len   @a ssid 缓冲区总字节数，建议 ≥ 33（32 字符 SSID + NUL）。
+ * @param[out] pwd            成功时写入以 @c '\\0' 结尾的密码；失败时内容未定义。
+ * @param[in]  max_pwd_len    @a pwd 缓冲区总字节数，需能容纳最长密码加 NUL。
+ *
+ * @retval true  命名空间打开成功，且 SSID、密码两个键均读取成功。
+ * @retval false 命名空间不存在/打开失败，或缺少任一键，或缓冲区不足以容纳存储的字符串。
+ */
+static bool load_wifi_credentials(char *ssid, size_t max_ssid_len, char *pwd, size_t max_pwd_len)
+{
+    nvs_handle_t my_handle;
+    esp_err_t err = nvs_open(NVS_NAMESPACE, NVS_READONLY, &my_handle);
+    if (err != ESP_OK) {
+        return false;
+    }
+
+    size_t ssid_len = max_ssid_len;
+    err = nvs_get_str(my_handle, NVS_KEY_SSID, ssid, &ssid_len);
+    if (err != ESP_OK) {
+        nvs_close(my_handle);
+        return false;
+    }
+
+    size_t pwd_len = max_pwd_len;
+    err = nvs_get_str(my_handle, NVS_KEY_PWD, pwd, &pwd_len);
+    nvs_close(my_handle);
+    return (err == ESP_OK);
+}
+
+/**
+ * @brief 将当前 WiFi SSID 与密码写入 NVS 并提交到 Flash。
+ *
+ * 在 STA 连接成功后调用，用于下次上电时由 @c load_wifi_credentials 读出并尝试自动连接。
+ * 流程为：以读写模式打开命名空间 → 写入两个字符串键 → @c nvs_commit → @c nvs_close；
+ * 任一步失败会记录错误日志并尽快关闭句柄，避免泄漏。
+ *
+ * @param[in] ssid 要保存的网络名称（与 @c wifi_connect_sta 等使用的 SSID 一致）。
+ * @param[in] pwd  要保存的密码；开放网络可为空字符串，但指针须有效。
+ */
+static void save_wifi_credentials(const char *ssid, const char *pwd)
+{
+    nvs_handle_t my_handle;
+    esp_err_t err = nvs_open(NVS_NAMESPACE, NVS_READWRITE, &my_handle);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Error (%s) opening NVS handle!", esp_err_to_name(err));
+        return;
+    }
+
+    err = nvs_set_str(my_handle, NVS_KEY_SSID, ssid);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Error (%s) saving SSID to NVS!", esp_err_to_name(err));
+        nvs_close(my_handle);
+        return;
+    }
+
+    err = nvs_set_str(my_handle, NVS_KEY_PWD, pwd);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Error (%s) saving password to NVS!", esp_err_to_name(err));
+        nvs_close(my_handle);
+        return;
+    }
+
+    err = nvs_commit(my_handle);
+    nvs_close(my_handle);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Error (%s) committing NVS!", esp_err_to_name(err));
+        return;
+    }
+
+    ESP_LOGI(TAG, "WiFi credentials saved to NVS: %s", ssid);
+}
+
 // ===================== 后台网络任务 =====================
 /**
  * @brief WiFi连接任务
@@ -370,6 +455,7 @@ static void connect_task(void *arg)
     if (ret == ESP_OK)
     {
         ili9341_draw_string_8x16(10, 10, "Connect Success!", LCD_COLOR_GREEN, LCD_COLOR_BLACK);
+        save_wifi_credentials(ssid, sm.password);
     }
     else
     {
@@ -424,14 +510,15 @@ static void smartconfig_task(void *arg)
  * @brief 进入指定状态
  * @param new_state 新状态
  */
-static void enter_state(menu_state_t new_state)
+ static void enter_state(menu_state_t new_state)
 {
-    // 修复：使用你定义的 sm.state
+    // 状态机监控日志
+    ESP_LOGI(TAG, "State transitioning to: %s", state_names[new_state]);
+    
     sm.state = new_state;
 
     switch (new_state) {
         case STATE_LIST:
-            // 修复：使用你代码中的 display_wifi_list
             display_wifi_list();
             break;
 
@@ -461,16 +548,26 @@ static void enter_state(menu_state_t new_state)
                 snprintf(msg, sizeof(msg), "%s", ssid);
                 ili9341_draw_string_utf8_limit(30, 125, msg, LCD_COLOR_WHITE, 0x2104, LCD_WIDTH - 60);
 
-                // 5. 打印正在使用的密码 (修复：使用 sm.password)
+                // 5. 打印正在使用的密码
                 char pwd_msg[128];
                 snprintf(pwd_msg, sizeof(pwd_msg), "Pwd: %s", sm.password);
                 ili9341_draw_string_8x16(30, 150, pwd_msg, LCD_COLOR_CYAN, 0x2104);
+
+                // 启动实际的网络连接任务
+                if (s_connect_task_handle == NULL) {
+                    xTaskCreate(connect_task, "connect_task", 4096, NULL, 5, &s_connect_task_handle);
+                }
             }
             break;
 
         case STATE_SMARTCONFIG:
             ili9341_fill_screen(LCD_COLOR_BLACK);
             ili9341_draw_string_8x16(30, 100, "SmartConfig Ready...", LCD_COLOR_YELLOW, LCD_COLOR_BLACK);
+            
+            // 启动实际的一键配网任务
+            if (s_sc_task_handle == NULL) {
+                xTaskCreate(smartconfig_task, "smartconfig_task", 4096, NULL, 5, &s_sc_task_handle);
+            }
             break;
 
         default:
@@ -792,31 +889,69 @@ static void refresh_timer_callback(TimerHandle_t timer)
  * @brief 菜单主任务
  * @param arg 参数
  */
-void menu_task(void *arg)
-{
-    lcd_init();            // 初始化LCD
-    init_buttons();        // 初始化按钮
-    wifi_connector_init(); // 初始化WiFi连接器
-
-    // 断开当前WiFi连接，准备扫描
-    esp_wifi_disconnect();
-    vTaskDelay(pdMS_TO_TICKS(500));
-
-    // 执行首次WiFi扫描
-    wifi_scan_and_update_list();
-
-    // 创建30秒刷新间隔的定时器
-    s_refresh_timer = xTimerCreate("wifi_refresh", pdMS_TO_TICKS(30000), pdTRUE, NULL, refresh_timer_callback);
-    xTimerStart(s_refresh_timer, 0);
-
-    // 进入初始状态（列表页面）
-    enter_state(STATE_LIST);
-
-    while (1)
-    {
-        vTaskDelay(pdMS_TO_TICKS(1000)); // 每秒延时，保持任务运行
-    }
-}
+ void menu_task(void *arg)
+ {
+     lcd_init();            // 初始化LCD
+     init_buttons();        // 初始化按钮
+     
+     // 【新增】：确保 NVS 正常初始化，以防底层的 wifi_connector_init 遗漏
+     esp_err_t err = nvs_flash_init();
+     if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+         ESP_ERROR_CHECK(nvs_flash_erase());
+         err = nvs_flash_init();
+     }
+     
+     wifi_connector_init(); // 初始化WiFi底层
+ 
+     // 绘制加载界面
+     ili9341_fill_screen(LCD_COLOR_BLACK);
+     ili9341_draw_string_8x16(10, LCD_HEIGHT / 2, "Scanning Environment...", LCD_COLOR_YELLOW, LCD_COLOR_BLACK);
+ 
+     esp_wifi_disconnect();
+     vTaskDelay(pdMS_TO_TICKS(500));
+ 
+     // 执行首次WiFi扫描
+     wifi_scan_and_update_list();
+ 
+     // 创建自动刷新定时器
+     s_refresh_timer = xTimerCreate("wifi_refresh", pdMS_TO_TICKS(30000), pdTRUE, NULL, refresh_timer_callback);
+     xTimerStart(s_refresh_timer, 0);
+ 
+     // 【新增核心逻辑】：检查 NVS 历史记录并尝试自动连接
+     char saved_ssid[33] = {0};
+     char saved_pwd[65] = {0};
+     bool auto_connected = false;
+ 
+     if (load_wifi_credentials(saved_ssid, sizeof(saved_ssid), saved_pwd, sizeof(saved_pwd))) {
+         ESP_LOGI(TAG, "Found saved NVS WiFi: %s", saved_ssid);
+         
+         // 遍历刚才扫描到的列表，看这个保存的 WiFi 在不在附近
+         for (int i = 0; i < g_ap_count; i++) {
+             if (strcmp((const char *)g_ap_records[i].ssid, saved_ssid) == 0) {
+                 ESP_LOGI(TAG, "Match found in scan list! Auto-connecting...");
+                 
+                 // 伪装用户操作：选中该项、填入密码、进入连接状态
+                 sm.selected_index = i;
+                 snprintf(sm.password, sizeof(sm.password), "%s", saved_pwd);
+                 sm.password_len = strlen(sm.password);
+                 
+                 enter_state(STATE_CONNECTING);
+                 auto_connected = true;
+                 break; // 找到就退出循环
+             }
+         }
+     }
+ 
+     // 如果没找到保存的 WiFi，或者保存的 WiFi 不在附近信号里，就进入常规列表页
+     if (!auto_connected) {
+         enter_state(STATE_LIST);
+     }
+ 
+     while (1)
+     {
+         vTaskDelay(pdMS_TO_TICKS(1000));
+     }
+ }
 
 /**
  * @brief 启动菜单功能

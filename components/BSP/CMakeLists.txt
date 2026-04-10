@@ -17,6 +17,7 @@ set(include_dirs
 set(requires
             esp_driver_spi
             esp_driver_gpio
+            esp_driver_ledc    
             esp_event
             nvs_flash
             esp_wifi
