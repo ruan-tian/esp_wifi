@@ -4,7 +4,8 @@ set(src_dirs
             font_picture
             wifi
             menu
-            unicodeToGB2312)
+            unicodeToGB2312
+            )
 
 set(include_dirs
             spi
@@ -12,7 +13,8 @@ set(include_dirs
             font_picture
             wifi
             menu
-            unicodeToGB2312)
+            unicodeToGB2312
+            )
 
 set(requires
             esp_driver_spi
@@ -24,6 +26,7 @@ set(requires
             esp_netif
             button
             esp_timer
+            esp_http_server
             )
 
 idf_component_register(SRC_DIRS ${src_dirs}

@@ -13,6 +13,7 @@
 #include "esp_log.h"
 #include "esp_wifi.h"
 #include "lcd.h"
+#include "web_server.h"
 
 #include "wifi_scanner.h"
 #include "wifi_connector.h"
@@ -42,6 +43,7 @@ typedef enum
     BUTTON_BACK,
     BUTTON_ENTER_LONG,  // 新增：长按确认键
     BUTTON_BACK_LONG,   // 新增：长按返回键
+    BUTTON_RIGHT_LONG,  // 新增：长按右键
     BUTTON_REFRESH,     
     BUTTON_RETURN_LIST,
 } button_event_t;
@@ -58,6 +60,7 @@ typedef enum
     STATE_CONNECTING,  // 直连中
     STATE_SMARTCONFIG, // 一键配网中
     STATE_INFO,        // 信息页
+    STATE_SERVER,  // Web 服务器页
 } menu_state_t;
 
 // 状态名称数组，用于调试日志
@@ -68,6 +71,7 @@ static const char *state_names[] = {
     [STATE_CONNECTING] = "CONNECTING",
     [STATE_SMARTCONFIG] = "SMARTCONFIG",
     [STATE_INFO] = "INFO", 
+    [STATE_SERVER] = "SERVER",
 };
 
 // ===================== 状态机上下文 =====================
@@ -322,6 +326,40 @@ static void display_info(void)
 
     // 底部返回提示
     ili9341_draw_string_8x16(10, 290, "[BACK] Return to List", LCD_COLOR_GREEN, LCD_COLOR_BLACK);
+}
+// ===================== UI: Web 服务器页 =====================
+/**
+ * @brief 显示Web服务器页面
+ */
+static void display_server(void)
+{
+    ili9341_fill_screen(LCD_COLOR_BLACK);
+    ili9341_draw_string_8x16(10, 10, "Web Server Mode", LCD_COLOR_GREEN, LCD_COLOR_BLACK);
+    ili9341_draw_line(0, 30, LCD_WIDTH, 30, LCD_COLOR_WHITE);
+
+    esp_netif_t *netif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+    esp_netif_ip_info_t ip_info;
+    
+    if (netif && esp_netif_get_ip_info(netif, &ip_info) == ESP_OK && ip_info.ip.addr != 0) {
+        // 网络正常，启动后台 HTTP 服务
+        start_webserver();
+        
+        char buf[64];
+        ili9341_draw_string_8x16(10, 50, "Server is Running!", LCD_COLOR_YELLOW, LCD_COLOR_BLACK);
+        
+        ili9341_draw_string_8x16(10, 80, "Open Browser on phone:", LCD_COLOR_WHITE, LCD_COLOR_BLACK);
+        
+        // 放大显示 IP 地址
+        snprintf(buf, sizeof(buf), "http://" IPSTR, IP2STR(&ip_info.ip));
+        ili9341_draw_string_8x16(20, 110, buf, LCD_COLOR_CYAN, LCD_COLOR_BLACK);
+        
+        ili9341_draw_string_8x16(10, 150, "Waiting for messages...", LCD_COLOR_GRAY, LCD_COLOR_BLACK);
+    } else {
+        ili9341_draw_string_8x16(10, 50, "Error: No Network!", LCD_COLOR_RED, LCD_COLOR_BLACK);
+        ili9341_draw_string_8x16(10, 70, "Please connect WiFi first.", LCD_COLOR_WHITE, LCD_COLOR_BLACK);
+    }
+
+    ili9341_draw_string_8x16(10, 290, "[BACK] Stop & Return", LCD_COLOR_RED, LCD_COLOR_BLACK);
 }
 // ===================== UI: 虚拟键盘绘制 =====================
 /**
@@ -623,6 +661,9 @@ static void smartconfig_task(void *arg)
         case STATE_INFO:
             display_info();
             break;
+        case STATE_SERVER:
+            display_server();
+            break;
 
         default:
             break;
@@ -785,6 +826,13 @@ static void dispatch_button_event(button_event_t event)
         esp_restart(); 
         return;
     }
+    if (event == BUTTON_RIGHT_LONG) {
+        if (sm.state == STATE_LIST || sm.state == STATE_INFO) {
+            ESP_LOGI(TAG, "LONG PRESS RIGHT triggers Web Server!");
+            enter_state(STATE_SERVER);
+        }
+        return;
+    }
     
     
     if (event == BUTTON_ENTER_LONG) {
@@ -828,6 +876,12 @@ static void dispatch_button_event(button_event_t event)
             xSemaphoreGive(s_connect_done_sem); // 2. 释放信号量，防止网络任务卡在最后的显示结果页
         }
         break;
+    case STATE_SERVER:
+        if (event == BUTTON_BACK) {
+            stop_webserver(); // 退出时必须安全关闭 HTTP 服务释放内存
+            enter_state(STATE_LIST);
+        }
+        break;
     }
 }
 
@@ -839,7 +893,7 @@ static void dispatch_button_event(button_event_t event)
  {
      const gpio_num_t pins[5] = {KEY_UP_GPIO, KEY_DOWN_GPIO, KEY_RIGHT_GPIO, KEY_ENTER_GPIO, KEY_BACK_GPIO};
      const button_event_t short_evts[5] = {BUTTON_UP, BUTTON_DOWN, BUTTON_RIGHT, BUTTON_ENTER, BUTTON_BACK};
-     const button_event_t long_evts[5]  = {BUTTON_UP, BUTTON_DOWN, BUTTON_RIGHT, BUTTON_ENTER_LONG, BUTTON_BACK_LONG};
+     const button_event_t long_evts[5]  = {BUTTON_UP, BUTTON_DOWN, BUTTON_RIGHT, BUTTON_ENTER_LONG, BUTTON_BACK_LONG,};
  
      bool last_state[5] = {1, 1, 1, 1, 1}; // 默认上拉为高电平
      TickType_t press_tick[5] = {0};
