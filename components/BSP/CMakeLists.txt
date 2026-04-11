@@ -5,7 +5,7 @@ set(src_dirs
             wifi
             lvgl
             ui
-
+            web
             )
 
 set(include_dirs
@@ -15,6 +15,7 @@ set(include_dirs
             wifi
             lvgl
             ui
+            web
             )
 
 set(requires
