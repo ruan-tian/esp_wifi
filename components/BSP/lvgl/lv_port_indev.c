@@ -38,6 +38,7 @@ void lv_port_indev_init(void)
     // LVGL 的按键必须要有个“焦点（Focus）”。设为默认后，你创建的按钮会自动加入这个组
     lv_group_t * g = lv_group_create();
     lv_group_set_default(g);
+    lv_group_set_wrap(g, true); 
     lv_indev_set_group(indev_keypad, g);
 
     ESP_LOGI(TAG, "LVGL 物理按键对接完成！");
