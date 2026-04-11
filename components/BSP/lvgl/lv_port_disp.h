@@ -1,20 +1,24 @@
 #ifndef LV_PORT_DISP_H
 #define LV_PORT_DISP_H
 
+#include "lvgl.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-#include "lvgl.h"
-
-// 初始化 LVGL 显示接口和心跳定时器
+/**
+ * @brief 初始化 LVGL 显示层
+ */
 void lv_port_disp_init(void);
 
-// LVGL 的守护任务，需要交给 FreeRTOS 运行
+/**
+ * @brief LVGL 守护任务 (需在 FreeRTOS 中创建)
+ */
 void lvgl_port_task(void *arg);
 
 #ifdef __cplusplus
-} /*extern "C"*/
+}
 #endif
 
-#endif /*LV_PORT_DISP_H*/
+#endif

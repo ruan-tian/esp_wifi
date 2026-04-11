@@ -137,45 +137,37 @@
      ESP_LOGI(TAG, "WiFi 调度核心已就绪");
  }
  
- /**
-  * @brief 手动输入密码的直连模式（阻塞执行）
-  */
+/**
+ * @brief 优化建议：在 main.c 中调用此函数时，请放入独立 Task
+ */
  esp_err_t wifi_connect_sta(const char *ssid, const char *password, int timeout_ms)
  {
      if (!s_wifi_inited) wifi_connector_init();
  
-     xEventGroupClearBits(s_wifi_event_group, WIFI_CONNECTED_BIT | WIFI_FAIL_BIT | SMARTCONFIG_DONE | WIFI_CANCEL_BIT);
-     s_retry_num = 1;  // 开始第一次尝试，若失败则进入延时重连机制
+     // 清除之前的标志位
+     xEventGroupClearBits(s_wifi_event_group, WIFI_CONNECTED_BIT | WIFI_FAIL_BIT | WIFI_CANCEL_BIT);
+     s_retry_num = 1;
  
      esp_wifi_disconnect();
-     vTaskDelay(pdMS_TO_TICKS(100));
+     vTaskDelay(pdMS_TO_TICKS(100)); // 给底层协议栈喘息时间
  
      wifi_config_t wifi_config = {0};
      strncpy((char *)wifi_config.sta.ssid, ssid, sizeof(wifi_config.sta.ssid) - 1);
      strncpy((char *)wifi_config.sta.password, password, sizeof(wifi_config.sta.password) - 1);
-     wifi_config.sta.threshold.authmode = WIFI_AUTH_WPA2_PSK;
  
-     ESP_LOGI(TAG, "正在尝试连接至: %s", ssid);
-     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
-     ESP_ERROR_CHECK(esp_wifi_connect());
+     ESP_LOGI(TAG, "连接中: %s...", ssid);
+     esp_wifi_set_config(WIFI_IF_STA, &wifi_config);
+     esp_wifi_connect();
  
-     // 阻塞等待底层事件组的结果
+     // 这里的阻塞是发生在任务内部的，只要不是在 LVGL 任务里运行就没问题
      EventBits_t bits = xEventGroupWaitBits(s_wifi_event_group,
                          WIFI_CONNECTED_BIT | WIFI_FAIL_BIT | WIFI_CANCEL_BIT,
                          pdFALSE, pdFALSE, pdMS_TO_TICKS(timeout_ms));
  
-     xEventGroupClearBits(s_wifi_event_group, WIFI_CONNECTED_BIT | WIFI_FAIL_BIT | SMARTCONFIG_DONE | WIFI_CANCEL_BIT);
+     // 安全擦除内存中的密码明文
+     memset(&wifi_config, 0, sizeof(wifi_config));
  
-     if (bits & WIFI_CONNECTED_BIT) {
-         ESP_LOGI(TAG, "成功连接至 %s", ssid);
-         return ESP_OK;
-     }
-     if (bits & WIFI_CANCEL_BIT) {
-         ESP_LOGW(TAG, "连接进程被强行中止");
-         return ESP_FAIL;
-     }
-     
-     ESP_LOGE(TAG, "无法连接至 %s (超时或被拒绝)", ssid);
+     if (bits & WIFI_CONNECTED_BIT) return ESP_OK;
      return ESP_FAIL;
  }
  

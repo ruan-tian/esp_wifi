@@ -3,8 +3,6 @@ set(src_dirs
             lcd
             font_picture
             wifi
-            menu
-            unicodeToGB2312
             lvgl
 
             )
@@ -14,8 +12,6 @@ set(include_dirs
             lcd
             font_picture
             wifi
-            menu
-            unicodeToGB2312
             lvgl
             )
 
@@ -31,6 +27,7 @@ set(requires
             esp_timer
             esp_http_server
             spiffs  
+            lvgl
             )
 
 idf_component_register(SRC_DIRS ${src_dirs}
@@ -38,4 +35,3 @@ idf_component_register(SRC_DIRS ${src_dirs}
                             REQUIRES ${requires})
 
 component_compile_options(-ffast-math -O3 -Wno-error -Wno-missing-braces)
-target_add_binary_data(${COMPONENT_LIB} "font_picture/HZK16C" TEXT)
