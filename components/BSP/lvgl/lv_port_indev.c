@@ -66,7 +66,7 @@ static uint32_t keypad_get_key(void)
     if (gpio_get_level(KEY_UP_GPIO) == 0)    return LV_KEY_PREV;  // 上一个
     if (gpio_get_level(KEY_DOWN_GPIO) == 0)  return LV_KEY_NEXT;  // 下一个
     if (gpio_get_level(KEY_RIGHT_GPIO) == 0) return LV_KEY_RIGHT; // 右
-    if (gpio_get_level(KEY_BACK_GPIO) == 0)  return LV_KEY_LEFT;  // 左 / 退格
+    if (gpio_get_level(KEY_BACK_GPIO) == 0)  return LV_KEY_ESC;  // 左 / 退格
     if (gpio_get_level(KEY_ENTER_GPIO) == 0) return LV_KEY_ENTER; // 确认
 
     return 0; // 没有按键按下

@@ -4,6 +4,7 @@ set(src_dirs
             font_picture
             wifi
             lvgl
+            ui
 
             )
 
@@ -13,6 +14,7 @@ set(include_dirs
             font_picture
             wifi
             lvgl
+            ui
             )
 
 set(requires

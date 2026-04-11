@@ -2,7 +2,7 @@
 #include "spi.h"        // SPI底层驱动依赖，负责硬件SPI数据发送
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"  // FreeRTOS系统延时，用于LCD初始化时序
-
+#include "string.h"
 /**
  * @brief  LCD底层发送命令函数
  * @param  cmd: ILI9341命令码
@@ -152,9 +152,13 @@ void lcd_init(void) {
 
     // ====================== 6. 全屏清屏（消除开机花屏） ======================
     // 定义一行黑色数据，逐行刷新全屏，清除显存随机噪点
-    uint16_t black_buf[240] = {0}; 
-    for(int i = 0; i < 320; i++) {
-        lcd_draw_color_buf(0, i, 239, i, black_buf);
+    uint16_t *black_buf = (uint16_t *)heap_caps_malloc(240 * sizeof(uint16_t), MALLOC_CAP_DMA);
+    if (black_buf != NULL) {
+        memset(black_buf, 0, 240 * sizeof(uint16_t)); // 填充黑色
+        for(int i = 0; i < 320; i++) {
+            lcd_draw_color_buf(0, i, 239, i, black_buf);
+        }
+        heap_caps_free(black_buf); // 用完释放
     }
 
     // ====================== 7. 开启屏幕背光 ======================
