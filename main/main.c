@@ -12,204 +12,163 @@
 // LVGL 核心与移植接口
 #include "lvgl.h"
 #include "lv_port_disp.h"
-#include "lv_port_indev.h"
+#include "lv_port_indev.h" // 如果你的按键还没修好，可以暂时不用管它
 
-static const char *TAG = "MAIN_APP";
+static const char *TAG = "MAIN_UI";
 
-// -------------------------------------------------------------------------
-// 1. 外部资源声明
-// -------------------------------------------------------------------------
-// 声明你生成的那个 18 号抗锯齿中文字体 (必须与网页转换时填写的 Name 一致)
+// 声明你的 18 号抗锯齿中文字体
 LV_FONT_DECLARE(my_font_chinese_18);
 
-// -------------------------------------------------------------------------
-// 2. 全局 UI 对象与样式
-// -------------------------------------------------------------------------
-static lv_obj_t *wifi_list;             // WiFi 扫描列表对象
-static lv_obj_t *pwd_container = NULL;  // 密码输入页面的容器 (图层管理)
-static lv_obj_t *pwd_ta;                // 密码输入框
-static lv_obj_t *kb;                    // 虚拟键盘
-static char current_ssid[33];           // 记录当前点击的 WiFi SSID
+// UI 核心对象
+static lv_obj_t * main_screen;
+static lv_obj_t * wifi_list;
 
-static lv_style_t style_base;           // 全局基础样式 (负责字体、间距)
-static lv_style_t style_focus;          // 焦点样式 (负责选中时的蓝色高亮，解决“丑陋方框”)
+// 全局样式定义
+static lv_style_t style_screen; // 屏幕全局背景
+static lv_style_t style_card;   // 卡片背景
+static lv_style_t style_btn;    // 列表按钮默认样式
+static lv_style_t style_focus;  // 列表按钮选中样式
 
 // -------------------------------------------------------------------------
-// 3. UI 样式初始化 (彻底解决“难看”和“细字体”问题)
+// 1. 初始化高级现代 UI 样式
 // -------------------------------------------------------------------------
-void ui_style_init(void) {
-    // --- 基础样式 (应用到全屏，解决方框格子和字体太细) ---
-    lv_style_init(&style_base);
-    lv_style_set_text_font(&style_base, &my_font_chinese_18); // 应用中文字库
-    lv_style_set_text_line_space(&style_base, 4);           // 增加行间距，更美观
-    lv_style_set_text_letter_space(&style_base, 1);         // 微调字间距
-    
-    // --- 焦点样式 (解决按键移动时出现的“莫名其妙的虚线方框”) ---
+static void ui_style_init(void) {
+    // 【屏幕全局样式】暗黑背景，全局默认中文字体
+    lv_style_init(&style_screen);
+    lv_style_set_bg_color(&style_screen, lv_color_hex(0x121212)); // 极深灰背景 (RGB565自动转换)
+    lv_style_set_text_font(&style_screen, &my_font_chinese_18);  // 全局抗锯齿中文
+    lv_style_set_text_color(&style_screen, lv_color_hex(0xE0E0E0)); // 亮灰色文字，不刺眼
+
+    // 【卡片样式】用于顶部状态栏和中间的列表容器
+    lv_style_init(&style_card);
+    lv_style_set_bg_color(&style_card, lv_color_hex(0x1E1E1E)); // 比背景稍亮的深灰
+    lv_style_set_border_width(&style_card, 0);                  // 移除所有丑陋的默认边框
+    lv_style_set_radius(&style_card, 8);                        // 现代感圆角
+
+    // 【列表按钮样式】
+    lv_style_init(&style_btn);
+    lv_style_set_bg_color(&style_btn, lv_color_hex(0x1E1E1E)); // 按钮背景和卡片融为一体
+    lv_style_set_border_width(&style_btn, 0);
+    lv_style_set_pad_all(&style_btn, 12);                      // 增加内边距，让列表更舒展
+
+    // 【焦点样式】物理按键选中时的蓝色高亮（彻底告别虚线框）
     lv_style_init(&style_focus);
-    lv_style_set_outline_width(&style_focus, 0);            // 彻底去掉选中时的外围虚线框
-    lv_style_set_border_width(&style_focus, 0);             // 去掉默认的控件边框
-    lv_style_set_bg_color(&style_focus, lv_palette_main(LV_PALETTE_BLUE)); // 选中时背景变为纯蓝
-    lv_style_set_bg_opa(&style_focus, LV_OPA_COVER);        // 背景全实色，遮盖底层
-    lv_style_set_text_color(&style_focus, lv_color_white()); // 选中时文字变白，更有科技感
+    lv_style_set_bg_color(&style_focus, lv_color_hex(0x2196F3)); // 科技感亮蓝色
+    lv_style_set_text_color(&style_focus, lv_color_hex(0xFFFFFF)); // 选中时文字变纯白
+    lv_style_set_outline_width(&style_focus, 0);                 // 去掉外轮廓虚线
 }
 
 // -------------------------------------------------------------------------
-// 4. 密码键盘页面事件回调
-// -------------------------------------------------------------------------
-static void kb_event_cb(lv_event_t * e) {
-    lv_event_code_t code = lv_event_get_code(e);
-
-    // 当用户按下虚拟键盘右下角的“确认/打勾”或者左下角的“隐藏”
-    if(code == LV_EVENT_READY || code == LV_EVENT_CANCEL) {
-        if(code == LV_EVENT_READY) {
-            const char * pwd = lv_textarea_get_text(pwd_ta);
-            ESP_LOGI(TAG, "用户确认连接! SSID: %s, Password: %s", current_ssid, pwd);
-            // 这里可以添加逻辑：调用 wifi_connect_to_ap(current_ssid, pwd)
-        } else {
-            ESP_LOGI(TAG, "用户取消了输入");
-        }
-
-        // 1. 销毁整个密码层
-        lv_obj_del(pwd_container);
-        pwd_container = NULL;
-
-        // 2. 重新显示背后的 WiFi 列表
-        lv_obj_clear_flag(wifi_list, LV_OBJ_FLAG_HIDDEN);
-
-        // 3. 把物理按键的焦点还给列表，恢复滚动
-        lv_group_focus_next(lv_group_get_default());
-    }
-}
-
-// -------------------------------------------------------------------------
-// 5. 弹出密码输入界面 (解决页面重叠与难看问题)
-// -------------------------------------------------------------------------
-static void show_password_keyboard(const char * ssid) {
-    if(pwd_container != NULL) return; // 防止连按导致的多次创建
-
-    strncpy(current_ssid, ssid, sizeof(current_ssid));
-
-    // 先隐藏主列表，防止透视和重叠干扰视觉
-    lv_obj_add_flag(wifi_list, LV_OBJ_FLAG_HIDDEN);
-
-    // 创建一个全屏覆盖层
-    pwd_container = lv_obj_create(lv_scr_act());
-    lv_obj_set_size(pwd_container, LCD_WIDTH, LCD_HEIGHT);
-    lv_obj_center(pwd_container);
-    
-    // 美化容器：去除边框和圆角，铺满屏幕
-    lv_obj_set_style_pad_all(pwd_container, 0, 0);
-    lv_obj_set_style_border_width(pwd_container, 0, 0);
-    lv_obj_set_style_radius(pwd_container, 0, 0);
-    lv_obj_add_style(pwd_container, &style_base, 0); // 应用中文字体
-
-    // 标题提示
-    lv_obj_t * label = lv_label_create(pwd_container);
-    lv_label_set_text_fmt(label, "请输入密码连接到:\n%s", ssid); // 支持中文显示了！
-    lv_obj_align(label, LV_ALIGN_TOP_MID, 0, 10);
-    lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_CENTER, 0);
-
-    // 密码文本框
-    pwd_ta = lv_textarea_create(pwd_container);
-    lv_textarea_set_password_mode(pwd_ta, true); // 星号隐藏
-    lv_textarea_set_one_line(pwd_ta, true);
-    lv_obj_set_width(pwd_ta, LCD_WIDTH - 20);
-    lv_obj_align(pwd_ta, LV_ALIGN_TOP_MID, 0, 60);
-
-    // 全功能虚拟键盘
-    kb = lv_keyboard_create(pwd_container);
-    lv_keyboard_set_textarea(kb, pwd_ta); // 键盘输入内容关联到文本框
-    lv_obj_set_size(kb, LCD_WIDTH, LCD_HEIGHT / 2 + 50); // 占屏幕下半部
-    lv_obj_align(kb, LV_ALIGN_BOTTOM_MID, 0, 0);
-    lv_obj_add_event_cb(kb, kb_event_cb, LV_EVENT_ALL, NULL);
-
-    // 关键：将键盘也加入物理按键控制组，并赋予美颜焦点样式
-    lv_group_add_obj(lv_group_get_default(), kb);
-    lv_obj_add_style(kb, &style_focus, LV_STATE_FOCUSED | LV_PART_ITEMS);
-    lv_group_focus_obj(kb); // 强行让按键控制键盘
-}
-
-// -------------------------------------------------------------------------
-// 6. WiFi 列表项点击回调
+// 2. 点击列表项的回调函数
 // -------------------------------------------------------------------------
 static void wifi_list_event_cb(lv_event_t * e) {
     lv_event_code_t code = lv_event_get_code(e);
     if(code == LV_EVENT_CLICKED) {
-        // 这里的 i 是创建按钮时存入的 user_data
+        // 获取点击的 WiFi 索引
         int index = (int)(uintptr_t)lv_event_get_user_data(e);
-        ESP_LOGI(TAG, "选中 WiFi: %s", g_ap_records[index].ssid);
+        ESP_LOGI(TAG, "用户选择了: %s", g_ap_records[index].ssid);
         
-        // 弹出密码界面
-        show_password_keyboard((const char *)g_ap_records[index].ssid);
+        // 此处可以接入你之前的密码键盘页面代码
+        // show_password_keyboard((const char *)g_ap_records[index].ssid);
     }
 }
 
 // -------------------------------------------------------------------------
-// 7. 主程序入口
+// 3. 构建现代仪表盘 UI
+// -------------------------------------------------------------------------
+static void build_dashboard_ui(void) {
+    main_screen = lv_scr_act();
+    lv_obj_add_style(main_screen, &style_screen, 0);
+
+    // --- 顶部状态栏 (Header) ---
+    lv_obj_t * header = lv_obj_create(main_screen);
+    lv_obj_set_size(header, LCD_WIDTH, 40);
+    lv_obj_align(header, LV_ALIGN_TOP_MID, 0, 0);
+    lv_obj_add_style(header, &style_card, 0);
+    lv_obj_set_style_radius(header, 0, 0); // 顶部栏不需要圆角
+    lv_obj_clear_flag(header, LV_OBJ_FLAG_SCROLLABLE); // 禁止滚动
+
+    lv_obj_t * title = lv_label_create(header);
+    lv_label_set_text(title, LV_SYMBOL_WIFI " WiFi 扫描终端"); // 图标+中文混排
+    lv_obj_align(title, LV_ALIGN_LEFT_MID, 5, 0);
+    lv_obj_set_style_text_color(title, lv_color_hex(0x4CAF50), 0); // 标题文字用点缀的绿色
+
+    // --- 中间列表卡片 ---
+    wifi_list = lv_list_create(main_screen);
+    lv_obj_set_size(wifi_list, LCD_WIDTH - 16, LCD_HEIGHT - 56); // 留出边缘间距
+    lv_obj_align(wifi_list, LV_ALIGN_BOTTOM_MID, 0, -8);
+    lv_obj_add_style(wifi_list, &style_card, 0);
+    lv_obj_set_scrollbar_mode(wifi_list, LV_SCROLLBAR_MODE_OFF); // 隐藏难看的滚动条
+
+    // --- 动态填充扫描到的 WiFi ---
+    if (g_ap_count == 0) {
+        lv_obj_t * no_data = lv_label_create(wifi_list);
+        lv_label_set_text(no_data, "未发现周围网络");
+        lv_obj_center(no_data);
+    } else {
+        lv_obj_t * first_btn = NULL; 
+
+        for(int i = 0; i < g_ap_count; i++) {
+            // 处理隐藏网络和名称长度
+            const char *ssid = (strlen((char *)g_ap_records[i].ssid) > 0) ? (char *)g_ap_records[i].ssid : "[隐藏网络]";
+            
+            // 组装带信号强度的字符串 (例如: "帅哥协会 [-45dBm]")
+            char buf[64];
+            snprintf(buf, sizeof(buf), "%s [%d]", ssid, g_ap_records[i].rssi);
+            
+            // 创建列表项
+            lv_obj_t * btn = lv_list_add_btn(wifi_list, LV_SYMBOL_WIFI, buf);
+            lv_obj_add_style(btn, &style_btn, 0); // 添加基础样式
+            lv_obj_add_style(btn, &style_focus, LV_STATE_FOCUSED); // 添加选中时的高亮样式
+            
+            // 绑定点击事件和用户数据(索引)
+            lv_obj_add_event_cb(btn, wifi_list_event_cb, LV_EVENT_ALL, (void*)(uintptr_t)i);
+            
+            // 将按钮加入按键控制组 (支持物理按键上下移动)
+            lv_group_add_obj(lv_group_get_default(), btn);
+
+            if(first_btn == NULL) first_btn = btn;
+        }
+
+        // 默认让物理焦点落在第一个按钮上
+        if(first_btn != NULL) {
+            lv_group_focus_obj(first_btn);
+        }
+    }
+}
+
+// -------------------------------------------------------------------------
+// 4. 主程序入口
 // -------------------------------------------------------------------------
 void app_main(void) {
-    // 初始化存储和硬件驱动
+    // 1. 基础系统初始化
     esp_err_t err = nvs_flash_init();
     if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
         ESP_ERROR_CHECK(nvs_flash_erase());
         nvs_flash_init();
     }
+
+    // 2. 底层驱动和 LVGL 桥接初始化
     lcd_init();
-
-    // 初始化 LVGL 及其接口
     lv_port_disp_init();
-    lv_port_indev_init();
-
-    // 初始化 UI 样式
-    ui_style_init();
     
-    // 给当前屏幕应用全局中文字体样式 (这样后续创建的 Label/List 都会默认用 18 号字)
-    lv_obj_add_style(lv_scr_act(), &style_base, 0);
+    // 【注意】如果你的物理按键连线还没修复导致疯狂乱跳，请注释掉下面这行：
+    // lv_port_indev_init(); 
 
-    // 执行一次底层的 WiFi 扫描
+    // 3. 执行 WiFi 扫描 (在无 UI 状态下先拿到数据)
+    ESP_LOGI(TAG, "正在扫描周围的 WiFi 网络...");
     wifi_scanner_init(); 
     wifi_scan_and_update_list(); 
 
-    // 创建主界面的 WiFi 列表
-    wifi_list = lv_list_create(lv_scr_act()); 
-    lv_obj_set_size(wifi_list, LCD_WIDTH, LCD_HEIGHT);   
-    lv_obj_center(wifi_list);
-    lv_obj_set_style_border_width(wifi_list, 0, 0);       // 去掉列表的大外框
-    lv_obj_set_style_radius(wifi_list, 0, 0);
-    lv_obj_set_scrollbar_mode(wifi_list, LV_SCROLLBAR_MODE_OFF); // 去掉丑陋的滚动条
+    // 4. 初始化 UI 样式并构建界面
+    ui_style_init();
+    build_dashboard_ui();
 
-    lv_list_add_text(wifi_list, "附近的无线网络 (WiFi List)");
-
-    lv_obj_t * first_btn = NULL; 
-
-    // 将扫描结果逐一显示在列表中
-    for(int i = 0; i < g_ap_count; i++) {
-        const char *ssid = (strlen((char *)g_ap_records[i].ssid) > 0) ? (char *)g_ap_records[i].ssid : "[隐藏网络]";
-        char buf[64];
-        snprintf(buf, sizeof(buf), "%s (%d dBm)", ssid, g_ap_records[i].rssi);
-        
-        // 创建列表按钮
-        lv_obj_t * btn = lv_list_add_btn(wifi_list, LV_SYMBOL_WIFI, buf);
-        lv_obj_add_event_cb(btn, wifi_list_event_cb, LV_EVENT_ALL, (void*)(uintptr_t)i);
-        
-        // 给按钮应用按键选中样式 (变蓝 + 去方框)
-        lv_group_add_obj(lv_group_get_default(), btn);
-        lv_obj_add_style(btn, &style_focus, LV_STATE_FOCUSED);
-
-        if(first_btn == NULL) first_btn = btn;
-    }
-
-    // 默认让焦点落在第一个 WiFi 按钮上，这样物理按键一按就有反应
-    if(first_btn != NULL) {
-        lv_group_focus_obj(first_btn);
-    }
-
-    // 启动 LVGL 核心心跳任务
+    // 5. 挂载 LVGL 心跳任务
     xTaskCreate(lvgl_port_task, "lvgl_task", 4096, NULL, 5, NULL);
-
-    ESP_LOGI(TAG, "系统启动完毕，开始操作吧！");
+    ESP_LOGI(TAG, "UI 渲染完成，系统就绪！");
 
     while (1) {
-        vTaskDelay(pdMS_TO_TICKS(1000));
+        vTaskDelay(pdMS_TO_TICKS(1000)); // 挂起主任务，将算力全部交给 LVGL 任务
     }
 }

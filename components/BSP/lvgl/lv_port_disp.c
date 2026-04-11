@@ -11,18 +11,10 @@ static const char *TAG = "LVGL_PORT";
 // 刷新回调函数：将 LVGL 缓冲区内容推送到屏幕
 static void disp_flush(lv_disp_drv_t * disp_drv, const lv_area_t * area, lv_color_t * color_p)
 {
-    // 1. 计算要刷新的像素点总数
-    uint32_t size = (area->x2 - area->x1 + 1) * (area->y2 - area->y1 + 1);
+    // 直接把颜色缓冲区丢给底层驱动
+    lcd_draw_color_buf(area->x1, area->y1, area->x2, area->y2, (const uint16_t *)color_p);
 
-    // 2. 调用我们在 lcd.c 里精简出来的底层函数
-    // 先告诉屏幕我们要往哪块区域写数据
-    lcd_set_window(area->x1, area->y1, area->x2, area->y2);
-
-    // 3. 直接发送原始颜色数组
-    // 一个像素(lv_color_t)占 2 字节 (RGB565)
-    spi_send_buf((const uint8_t *)color_p, size * 2);
-
-    // 4. 重要：通知 LVGL 驱动刷新已完成
+    // 告诉 LVGL 刷屏完成
     lv_disp_flush_ready(disp_drv);
 }
 
