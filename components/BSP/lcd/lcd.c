@@ -154,7 +154,7 @@ void lcd_init(void) {
     // 定义一行黑色数据，逐行刷新全屏，清除显存随机噪点
     uint16_t *black_buf = (uint16_t *)heap_caps_malloc(240 * sizeof(uint16_t), MALLOC_CAP_DMA);
     if (black_buf != NULL) {
-        memset(black_buf, 0, 240 * sizeof(uint16_t)); // 填充黑色
+        memset(black_buf, 0xFF, 240 * sizeof(uint16_t)); // 填充黑色
         for(int i = 0; i < 320; i++) {
             lcd_draw_color_buf(0, i, 239, i, black_buf);
         }
@@ -164,3 +164,4 @@ void lcd_init(void) {
     // ====================== 7. 开启屏幕背光 ======================
     gpio_set_level(LCD_BL_PIN, 1);
 }
+

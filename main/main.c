@@ -24,7 +24,7 @@ void app_main(void) {
         ESP_ERROR_CHECK(nvs_flash_erase());
         nvs_flash_init();
     }
-
+    
     // 2. 底层驱动和 LVGL 桥接初始化
     lcd_init();
     lv_port_disp_init();
