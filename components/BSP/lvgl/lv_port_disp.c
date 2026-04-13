@@ -8,21 +8,59 @@
 
 static const char *TAG = "LVGL_PORT";
 
-// 刷新回调函数：将 LVGL 缓冲区内容推送到屏幕
+/**
+ * @brief LVGL 显示刷新回调函数 (The Flush Callback)
+ * 
+ * 【核心逻辑】：这是 LVGL 与你的物理屏幕（LCD）沟通的唯一桥梁。
+ * 当 LVGL 渲染完一帧画面后，它不会直接操作硬件，而是调用这个函数，把渲染好的像素数据“丢”给你。
+ * 
+ * 【执行流程】：
+ * 1. LVGL 将屏幕划分为若干个区域（Area），通常是一行或多行。
+ * 2. LVGL 准备好这些区域的颜色数据，存放在 color_p 指向的缓冲区中。
+ * 3. 你在这里调用底层 LCD 驱动（如 spi_write），将数据发送给屏幕。
+ * 4. **关键步骤**：数据发送完毕后，必须调用 lv_disp_flush_ready()，告诉 LVGL：“这块区域刷完了，你可以继续处理下一块了”。
+ *    如果不调用它，LVGL 会一直卡在这里等待，导致界面死机。
+ * 
+ * @param disp_drv 显示驱动对象指针，用于后续调用 lv_disp_flush_ready 汇报状态
+ * @param area     需要刷新的矩形区域坐标 {x1, y1, x2, y2}
+ * @param color_p  指向颜色数据的指针。注意：这里的颜色格式必须与你在 lv_conf.h 中配置的 LV_COLOR_16_SWAP 等设置匹配
+ */
 static void disp_flush(lv_disp_drv_t * disp_drv, const lv_area_t * area, lv_color_t * color_p)
 {
     // 直接把颜色缓冲区丢给底层驱动
     lcd_draw_color_buf(area->x1, area->y1, area->x2, area->y2, (const uint16_t *)color_p);
 
     // 告诉 LVGL 刷屏完成
-    lv_disp_flush_ready(disp_drv);
+    lv_disp_flush_ready(disp_drv); 
 }
 
-// 定时器回调：为 LVGL 提供 1 毫秒精度的系统心跳
+/**
+ * @brief LVGL 系统心跳定时器回调 (The Heartbeat)
+ * 
+ * 【核心逻辑】：LVGL 是一个基于时间轴的 UI 库。动画、按钮长按检测、自动隐藏光标等功能都依赖一个精确的“系统时间”。
+ * 
+ * 【为什么需要它】：
+ * LVGL 自身不产生时间，它需要你每隔固定时间（通常是 1ms ~ 5ms）喂给它一个 tick。
+ * 如果心跳停止，LVGL 的所有动画和交互都会冻结。
+ * 
+ * @param arg 定时器回调参数指针（此处未使用）
+ */
 static void lv_tick_task(void *arg) {
     lv_tick_inc(1); 
 }
 
+/**
+ * @brief 初始化 LVGL 显示端口 (Port Initialization)
+ * 
+ * 【新手必读 - 移植四部曲】：
+ * 1. lv_init(): 启动 LVGL 引擎，初始化内部链表和内存池。
+ * 2. 分配缓冲区 (Draw Buffer): LVGL 需要一个地方暂存渲染好的像素。
+ *    - 为什么用 heap_caps_malloc(MALLOC_CAP_DMA)? 
+ *      因为 ESP32 的 SPI 控制器通过 DMA 传输数据时，要求源内存必须是连续的且位于内部 RAM (SRAM)。
+ *    - 缓冲区大小决定了刷新效率。太小会导致频繁中断 CPU，太大会占用过多 SRAM。
+ * 3. 注册驱动 (Register Driver): 告诉 LVGL 你的屏幕分辨率是多少，以及上面写的 disp_flush 函数在哪里。
+ * 4. 启动心跳 (Start Tick): 开启一个高精度定时器，确保 LVGL 能感知时间的流逝。
+ */
 void lv_port_disp_init(void)
 {
     // 1. 初始化 LVGL 核心
@@ -41,7 +79,7 @@ void lv_port_disp_init(void)
         return;
     }
     
-    lv_disp_draw_buf_init(&draw_buf_dsc, buf_1, NULL, buffer_pixels);
+    lv_disp_draw_buf_init(&draw_buf_dsc, buf_1, NULL, buffer_pixels);// 分配缓冲区
 
     // 3. 配置显示驱动
     static lv_disp_drv_t disp_drv; 
@@ -67,7 +105,21 @@ void lv_port_disp_init(void)
     ESP_LOGI(TAG, "LVGL 显示桥接完成，心跳已挂载");
 }
 
-// 守护任务：负责处理 UI 的动画、事件和重绘
+/**
+ * @brief LVGL 端口守护任务 (The Handler Task)
+ * 
+ * 【核心逻辑】：LVGL 不是多线程安全的，它所有的 UI 操作必须在同一个任务（线程）中完成。
+ * 这个任务就是 LVGL 的“大脑”，负责调度一切。
+ * 
+ * 【循环逻辑】：
+ * 1. lv_timer_handler(): 处理所有待办的 UI 任务（重绘、动画计算、事件回调）。
+ *    它会返回一个建议值，告诉你“再过多少毫秒我又有新任务要处理了”。
+ * 2. vTaskDelay(): 根据建议值让出 CPU。
+ *    - 为什么要动态休眠？如果一直不休眠，CPU 占用率会是 100%；如果休眠太久，界面会卡顿。
+ *    - 限制在 5ms~50ms 之间是为了兼顾流畅度和功耗。
+ * 
+ * @param arg 任务创建时传入的参数指针（此处未使用）
+ */
 void lvgl_port_task(void *arg)
 {
     while (1) {

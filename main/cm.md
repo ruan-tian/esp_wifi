@@ -12,6 +12,16 @@ idf.py reconfigure //同步组件（下载代码）
 idf.py add-dependency "lvgl/lvgl^8.3.11"
 idf.py menuconfig
 
+git config --global http.postBuffer 524288000
+git config --global http.maxRequestBuffer 1048576000
+git config --global core.compression 0
+# 先推送最近1个提交
+git push origin HEAD~1:main
+# 再推送剩余的提交
+git push origin main
+
+
+lv_font_conv --no-compress --bpp 4 --size 18 --font SarasaMonoSC-Regular.ttf -r 0x4E00-0x6CFF -r 0x20-0x7E --font FontAwesome5-Solid+Brands+Regular.woff -r 0xF000-0xF1FF --format lvgl --output my_font_chinese_18.c
 
 target_add_binary_data(${COMPONENT_LIB} "font_picture/HZK16C" TEXT)//连接字库
 # Cursor 常用快捷键（Windows 版）
